@@ -16,6 +16,11 @@ jobs:
   plan:
     name: IaC - Plan
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        # Terraform files are in the terraform directory
+        working-directory: ./terraform
 
     permissions:
       id-token: write
