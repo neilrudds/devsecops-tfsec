@@ -7,7 +7,6 @@ on:
     paths:
       - 'feat/**'
       - 'fix/**'
-      - 'wip/**'
 
 env:
     AWS_REGION: us-east-1
