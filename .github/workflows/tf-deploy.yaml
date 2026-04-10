@@ -118,34 +118,34 @@ jobs:
       continue-on-error: true
 
     - uses: actions/github-script@v7 
-    with:
-      github-token: ${{ secrets.GITHUB_TOKEN }}
-      script: |
-        // Get the result of the apply step
-        const applyOutcome = "${{ steps.apply.outcome }}";
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+            APPLY: "terraform\n${{ steps.apply.outputs.stdout }}"
+        script: |
+          // Get the result of the apply step
+          const applyOutcome = "${{ steps.apply.outcome }}";
 
-        // Get the output of the apply command (or show a default message)
-        const applyOutput = process.env.APPLY || 'No output available';
+          // Get the output of the apply command (or show a default message)
+          const applyOutput = process.env.APPLY || 'No output available';
 
-        // Build the comment body
-        const commentBody = [
-          `#### Terraform Apply \`${applyOutcome}\``,
-          "<details><summary>Show Apply Output</summary>",
-          "",
-          "```",
-          applyOutput,
-          "```",
-          "</details>",
-          "",
-          `*Applied by: @${{ github.actor }}*`
-        ].join("\n");
+          // Build the comment body
+          const commentBody = [
+            `#### Terraform Apply \`${applyOutcome}\``,
+            "<details><summary>Show Apply Output</summary>",
+            "",
+            "```",
+            applyOutput,
+            "```",
+            "</details>",
+            "",
+            `*Applied by: @${{ github.actor }}*`
+          ].join("\n");
 
-        // Post the comment to the pull request
-        await github.rest.issues.createComment({
-          issue_number: context.issue.number,
-          owner: context.repo.owner,
-          repo: context.repo.repo,
-          body: commentBody
-        });
-      env: 
-        APPLY: "terraform\n${{ steps.apply.outputs.stdout }}"
+          // Post the comment to the pull request
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: commentBody
+          });
