@@ -2,8 +2,8 @@ data "aws_caller_identity" "current" {}
 
 data "archive_file" "lambda_zip" {
   type        = "zip"
-  source_dir  = "${path.module}/lambda/app.py"
-  output_path = "${path.module}/lambda/app.zip"
+  source_dir  = "./lambda"
+  output_path = "./lambda/app.zip"
 }
 
 resource "aws_iam_role" "lambda_exec" {
