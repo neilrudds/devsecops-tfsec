@@ -1,0 +1,65 @@
+name: Destroy ECS Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm-destroy:
+        description: 'Type "DESTROY" to confirm infrastructure destruction'
+        required: true
+        type: string
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: 1.13.4
+
+permissions:
+  id-token: write   # This is required for requesting the JWT token
+
+jobs:
+  destroy:
+    name: Destroy Infrastructure
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        # Terraform files are in the terraform directory
+        working-directory: ./terraform
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+      with:
+        role-to-assume: arn:aws:iam::151482153576:role/Github_Repo_devsecops-tfsec
+        role-session-name: destroy-infrastructure-session
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+
+    - name: Terraform init
+      id: init
+      run: terraform init
+
+    - name: Confirm destruction input
+      id: confirm
+      run: |
+        if [ "${{ github.event.inputs.confirm-destroy }}" != "DESTROY" ]; then
+          echo "Destruction not confirmed. Exiting."
+          exit 1
+        fi
+
+    - name: Terraform plan for destroy
+      id: plan-destroy
+      run: terraform plan -destroy -out=tfplan-destroy
+
+    - name: Terraform destroy
+      id: destroy
+      run: terraform apply -auto-approve tfplan-destroy
+
+    - name: Summary
+      run: echo "## Infrastructure destroyed successfully!" >> $GITHUB_STEP_SUMMARY
