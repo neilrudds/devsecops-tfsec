@@ -7,6 +7,7 @@ on:
     paths:
       - 'feat/**'
       - 'fix/**'
+      - 'wip/**'
 
 env:
     AWS_REGION: us-east-1
@@ -112,10 +113,99 @@ jobs:
     needs: plan
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        # Terraform files are in the terraform directory
+        working-directory: ./terraform
     environment:
       name: terraform-prod
 
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
     steps:
+    - name: Git Clone the Repo
+      uses: actions/checkout@v4
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+      with:
+        role-to-assume: arn:aws:iam::151482153576:role/Github_Repo_devsecops-tfsec
+        role-session-name: deploy-infrastructure-session
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+        terraform_wrapper: true
+
+    - name: Terraform Init
+      id: init
+      run: terraform init
+
+    - name: Terraform Format
+      id: fmt
+      run: terraform fmt -check
+
+    - name: Terraform Validate
+      id: validate
+      run: terraform validate -no-color
+
+    - name: Terraform Plan
+      id: plan
+      run: terraform plan -no-color -input=false -out=tfplan
+      continue-on-error: true
+
+    - name: Upload Terraform Plan Artifact
+      if: github.event_name == 'pull_request' && steps.plan.outcome == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: tfplan
+        path: tfplan
+        retention-days: 1
+
+    - uses: actions/github-script@v7 
+      if: github.event_name == 'pull_request'
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          // Check if the Terraform plan was successful
+          const planStatus = "${{ steps.plan.outcome }}" === "success"
+            ? "Plan succeeded"
+            : "Plan failed";
+
+          // Create a message to ask for approval if the plan succeeded
+          const approvalMessage = planStatus === "Plan succeeded"
+            ? "\n\n### Changes detected! Please review the plan and approve the apply job in GitHub Actions."
+            : "";
+
+          // Build the full comment body
+          const commentBody = [
+            "#### Terraform Format and Style: not checked",
+            `#### Terraform Initialization: \`${{ steps.init.outcome }}\``,
+            `#### Terraform Validation: \`${{ steps.validate.outcome }}\``,
+            "",
+            `#### Terraform Plan Status: ${planStatus}`,
+            "",
+            "Terraform plan was uploaded as an artifact.",
+            `[View it in the Actions tab](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
+            approvalMessage,
+            "",
+            `*Pusher: @${{ github.actor }}, Action: ${{ github.event_name }}, Workflow: ${{ github.workflow }}*`
+          ].join("\n");
+
+          // Post the comment to the pull request
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: commentBody
+          });
+
     - name: Terraform Apply
       id: apply
       run: terraform apply -auto-approve -input=false tfplan
