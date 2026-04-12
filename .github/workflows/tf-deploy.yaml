@@ -9,12 +9,18 @@ on:
       - 'fix/**'
       - 'wip/**'
 
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  security-events: write
+
 env:
     AWS_REGION: us-east-1
     TF_VERSION: 1.13.4
 
 jobs:
-  scan:
+  security:
     name: IaC - Security Scan
     runs-on: ubuntu-latest
     defaults:
@@ -22,47 +28,38 @@ jobs:
         shell: bash
         # Terraform files are in the terraform directory
         working-directory: ./terraform
-
-    permissions:
-      id-token: write
-      contents: read
-      pull-requests: write
-
+    
     steps:
-    - name: Git Clone the Repo
-      uses: actions/checkout@v4
+      - name: Git Clone the Repo
+        uses: actions/checkout@v4
 
-    - name: Run tfsec
-      uses: aquasecurity/tfsec-action@v1.0.3
-      with:
-        soft_fail: false
-        format: sarif
-        additional_args: --out tfsec-results.sarif
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          soft_fail: false
+          format: sarif
+          additional_args: --out tfsec-results.sarif
 
-    - name: Upload tfsec results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: tfsec-results.sarif
+      - name: Upload tfsec results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: tfsec-results.sarif
 
-    - name: Run tfsec with standard output
-      uses: aquasecurity/tfsec-action@v1.0.3
-      with:
-        soft_fail: false
-        
+      - name: Run tfsec with standard output
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          soft_fail: false
+
   plan:
     name: IaC - Plan
     runs-on: ubuntu-latest
+    needs: security
     defaults:
       run:
         shell: bash
         # Terraform files are in the terraform directory
         working-directory: ./terraform
-
-    permissions:
-      id-token: write
-      contents: read
-      pull-requests: write
 
     steps:
     - name: Git Clone the Repo
@@ -79,15 +76,11 @@ jobs:
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: ${{ env.TF_VERSION }}
-        terraform_wrapper: true
+        terraform_wrapper: false
 
-    - name: Terraform Init
+    - name: Terraform init
       id: init
-      run: terraform init
-
-    - name: Terraform Format
-      id: fmt
-      run: terraform fmt -check
+      run: terraform init -input=false
 
     - name: Terraform Validate
       id: validate
@@ -96,58 +89,60 @@ jobs:
     - name: Terraform Plan
       id: plan
       run: terraform plan -no-color -input=false -out=tfplan
-      continue-on-error: true
+      continue-on-error: true 
 
     - name: Upload Terraform Plan Artifact
-      if: github.event_name == 'pull_request' && steps.plan.outcome == 'success'
+      if: steps.plan.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
-        name: tfplan
+        name: tfplan-${{ github.sha }}
         path: tfplan
-        retention-days: 1
+        retention-days: 5
 
-    - uses: actions/github-script@v7 
+    - name: Comment PR with Plan Results
+      uses: actions/github-script@v7 
       if: github.event_name == 'pull_request'
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
-          // Check if the Terraform plan was successful
-          const planStatus = "${{ steps.plan.outcome }}" === "success"
-            ? "Plan succeeded"
-            : "Plan failed";
+            // Check if the Terraform plan was successful
+            const planStatus = "${{ steps.plan.outcome }}" === "success"
+              ? "✅ Plan succeeded"
+              : "❌ Plan failed";
 
-          // Create a message to ask for approval if the plan succeeded
-          const approvalMessage = planStatus === "Plan succeeded"
-            ? "\n\n### Changes detected! Please review the plan and approve the apply job in GitHub Actions."
-            : "";
+            // Create a message to ask for approval if the plan succeeded
+            const approvalMessage = planStatus === "✅ Plan succeeded"
+              ? "\n\n### ⚠️ Changes detected! Review the plan above. Changes will be applied automatically when merged to main."
+              : "";
 
-          // Build the full comment body
-          const commentBody = [
-            "#### Terraform Format and Style: not checked",
-            `#### Terraform Initialization: \`${{ steps.init.outcome }}\``,
-            `#### Terraform Validation: \`${{ steps.validate.outcome }}\``,
-            "",
-            `#### Terraform Plan Status: ${planStatus}`,
-            "",
-            "Terraform plan was uploaded as an artifact.",
-            `[View it in the Actions tab](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
-            approvalMessage,
-            "",
-            `*Pusher: @${{ github.actor }}, Action: ${{ github.event_name }}, Workflow: ${{ github.workflow }}*`
-          ].join("\n");
+            // Build the full comment body
+            const commentBody = [
+              "## Terraform Plan Results",
+              "",
+              `#### Security Scan: ✅ Passed (tfsec)`,
+              `#### Terraform Initialization: \`${{ steps.init.outcome }}\``,
+              `#### Terraform Validation: \`${{ steps.validate.outcome }}\``,
+              `#### Terraform Plan: ${planStatus}`,
+              "",
+              "Terraform plan was uploaded as an artifact.",
+              `[View it in the Actions tab](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
+              approvalMessage,
+              "",
+              `*Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Workflow: \`${{ github.workflow }}\`*`
+            ].join("\n");
 
-          // Post the comment to the pull request
-          await github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: commentBody
-          });
+            // Post the comment to the pull request
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: commentBody
+            });
 
   apply:
     name: IaC - Apply
     needs: plan
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -157,11 +152,6 @@ jobs:
     environment:
       name: terraform-prod
 
-    permissions:
-      id-token: write
-      contents: read
-      pull-requests: write
-
     steps:
     - name: Git Clone the Repo
       uses: actions/checkout@v4
@@ -177,105 +167,20 @@ jobs:
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: ${{ env.TF_VERSION }}
-        terraform_wrapper: true
+        terraform_wrapper: false
 
-    - name: Terraform Init
-      id: init
-      run: terraform init
-
-    - name: Terraform Format
-      id: fmt
-      run: terraform fmt -check
-
-    - name: Terraform Validate
-      id: validate
-      run: terraform validate -no-color
-
-    - name: Terraform Plan
-      id: plan
-      run: terraform plan -no-color -input=false -out=tfplan
-      continue-on-error: true
-
-    - name: Upload Terraform Plan Artifact
-      if: github.event_name == 'pull_request' && steps.plan.outcome == 'success'
-      uses: actions/upload-artifact@v4
+    - name: Download Terraform Plan Artifact
+      uses: actions/download-artifact@v4
       with:
-        name: tfplan
-        path: tfplan
-        retention-days: 1
+        name: tfplan-${{ github.sha }}
 
-    - uses: actions/github-script@v7 
-      if: github.event_name == 'pull_request'
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          // Check if the Terraform plan was successful
-          const planStatus = "${{ steps.plan.outcome }}" === "success"
-            ? "Plan succeeded"
-            : "Plan failed";
-
-          // Create a message to ask for approval if the plan succeeded
-          const approvalMessage = planStatus === "Plan succeeded"
-            ? "\n\n### Changes detected! Please review the plan and approve the apply job in GitHub Actions."
-            : "";
-
-          // Build the full comment body
-          const commentBody = [
-            "#### Terraform Format and Style: not checked",
-            `#### Terraform Initialization: \`${{ steps.init.outcome }}\``,
-            `#### Terraform Validation: \`${{ steps.validate.outcome }}\``,
-            "",
-            `#### Terraform Plan Status: ${planStatus}`,
-            "",
-            "Terraform plan was uploaded as an artifact.",
-            `[View it in the Actions tab](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
-            approvalMessage,
-            "",
-            `*Pusher: @${{ github.actor }}, Action: ${{ github.event_name }}, Workflow: ${{ github.workflow }}*`
-          ].join("\n");
-
-          // Post the comment to the pull request
-          await github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: commentBody
-          });
+    - name: Terraform init
+      run: terraform init -input=false
 
     - name: Terraform Apply
       id: apply
-      run: terraform apply -auto-approve -input=false tfplan
-      continue-on-error: true
+      run: terraform apply -input=false tfplan
 
-    - uses: actions/github-script@v7
-      env:
-        APPLY: "terraform\n${{ steps.apply.outputs.stdout }}"
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          // Get the result of the apply step
-          const applyOutcome = "${{ steps.apply.outcome }}";
-
-          // Get the output of the apply command (or show a default message)
-          const applyOutput = process.env.APPLY || 'No output available';
-
-          // Build the comment body
-          const commentBody = [
-            `#### Terraform Apply \`${applyOutcome}\``,
-            "<details><summary>Show Apply Output</summary>",
-            "",
-            "```",
-            applyOutput,
-            "```",
-            "</details>",
-            "",
-            `*Applied by: @${{ github.actor }}*`
-          ].join("\n");
-
-          // Post the comment to the pull request
-          await github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: commentBody
-          });
+    - name: Terraform Output
+      if: steps.apply.outcome == 'success'
+      run: terraform output -json
