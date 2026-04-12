@@ -41,6 +41,12 @@ jobs:
         if: always()
         with:
           sarif_file: tfsec-results.sarif
+
+      - name: Run tfsec with standard output
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: ./terraform
+          soft_fail: false
         
   plan:
     name: IaC - Plan
