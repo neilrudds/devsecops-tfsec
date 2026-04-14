@@ -1,4 +1,4 @@
-name: Destroy ECS Infrastructure
+name: Destroy Infrastructure
 
 on:
   workflow_dispatch:

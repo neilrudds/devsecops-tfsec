@@ -34,19 +34,64 @@ jobs:
           soft_fail: false
           working_directory: ./terraform
           format: sarif
-          additional_args: --out tfsec-results.sarif
+          additional_args: --out tfsec.sarif
 
-      - name: Upload tfsec results to GitHub Security
+      - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
-          sarif_file: tfsec-results.sarif
+          sarif_file: tfsec.sarif
 
-      - name: Run tfsec with standard output
-        uses: aquasecurity/tfsec-action@v1.0.3
+      - name: Comment PR with tfsec Results
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
         with:
-          working_directory: ./terraform
-          soft_fail: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const sarif = JSON.parse(fs.readFileSync('tfsec.sarif', 'utf8'));
+            const results = sarif.runs?.[0]?.results ?? [];
+
+            const passed = results.length === 0;
+
+            const rows = results.map(r => {
+              const loc = r.locations?.[0]?.physicalLocation;
+              const file = loc?.artifactLocation?.uri ?? 'unknown';
+              const line = loc?.region?.startLine ?? '?';
+              const severity = r.level ?? 'unknown';
+              const rule = r.ruleId ?? 'unknown';
+              const msg = r.message?.text ?? '';
+              return `| ${severity} | \`${rule}\` | \`${file}:${line}\` | ${msg} |`;
+            }).join('\n');
+
+            const table = passed ? '' : [
+              '| Severity | Rule | Location | Description |',
+              '|----------|------|----------|-------------|',
+              rows
+            ].join('\n');
+
+            const body = [
+              '## IaC Security Scan Results (tfsec)',
+              passed ? '### ✅ No violations found' : `### ❌ ${results.length} violation(s) detected — review required`,
+              '',
+              table,
+              '',
+              `> Full historical results available in [Security → Code Scanning](https://github.com/${{ github.repository }}/security/code-scanning)`,
+              '',
+              `*Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Workflow: \`${{ github.workflow }}\`*`
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+
+      - name: Fail if tfsec found violations
+        if: github.event_name == 'pull_request'
+        run: |
+          RESULTS=$(jq '.runs[0].results | length' tfsec.sarif)
+          if [ "$RESULTS" -gt 0 ]; then exit 1; fi
         
   plan:
     name: IaC - Plan
