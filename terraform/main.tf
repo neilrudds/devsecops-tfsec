@@ -67,7 +67,18 @@ resource "aws_lambda_function_url" "request_logger_url" {
   }
 }
 
+resource "aws_kms_key" "cloudwatch_key" {
+  description             = "Ths key is for testing only"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
+}
+
 resource "aws_cloudwatch_log_group" "lambda_logs" {
   name              = "/aws/lambda/${aws_lambda_function.request_logger.function_name}"
+  kms_key_id = aws_kms_key.cloudwatch_key.arn
   retention_in_days = 14
+
+  depends_on = [ 
+    aws_kms_key.cloudwatch_key 
+  ]
 }
